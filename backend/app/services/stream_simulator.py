@@ -45,7 +45,7 @@ SAMPLE_TICKETS = [
 
 async def start_live_stream_simulator():
     """Background simulator task generating real-time customer data streams and AI tasks."""
-    print("🚀 Live Ingestion Stream Simulator started...")
+    print("Live Ingestion Stream Simulator started...")
     idx = 0
     while True:
         await asyncio.sleep(12)  # Emit event every 12 seconds

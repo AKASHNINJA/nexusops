@@ -8,10 +8,9 @@ import {
   Cpu,
   CheckCircle2,
   XCircle,
-  Zap,
-  Activity
+  Zap
 } from 'lucide-react';
-import { useWebSocket, WebSocketEvent } from '../hooks/useWebSocket';
+import { useWebSocket } from '../hooks/useWebSocket';
 
 interface Stats {
   total_organizations: number;
@@ -69,76 +68,46 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<'agent-queue' | 'connectors' | 'entities' | 'audit'>('agent-queue');
   const [liveToast, setLiveToast] = useState<string | null>(null);
 
-  const { isConnected, lastEvent } = useWebSocket();
+  const { isConnected, lastEvent } = useWebSocket('ws://localhost:8000/api/v1/ws/events');
 
   const [stats, setStats] = useState<Stats>({
-    total_organizations: 1,
-    active_connectors: 3,
-    total_records_ingested: 2880,
-    resolved_entities_count: 2,
-    pending_approvals_count: 2,
+    total_organizations: 0,
+    active_connectors: 0,
+    total_records_ingested: 0,
+    resolved_entities_count: 0,
+    pending_approvals_count: 0,
     executed_tasks_count: 0
   });
 
-  const [tasks, setTasks] = useState<AgentTask[]>([
-    {
-      id: 'task-001',
-      resolved_entity_id: 'ent-acme-001',
-      title: 'SLA Breach Compensation: Issue Credit Refund',
-      description: 'Zendesk ticket ZD-9912 exceeded the Platinum SLA resolution threshold by 3.5 hours due to DB latency. AI Agent recommends issuing a $2,500 billing credit per contract terms.',
-      priority: 'HIGH',
-      status: 'AWAITING_APPROVAL',
-      proposed_tool_name: 'issue_refund',
-      proposed_tool_args: { amount: 2500, customer_name: 'Acme Global Logistics Inc', ticket_id: 'ZD-9912' },
-      ai_confidence_score: 0.92,
-      ai_reasoning: 'Calculated SLA breach time = 210 mins. Contract clause #14.2 requires 5% credit ($2,500). Action tagged as high risk due to financial payout.',
-      requires_human_approval: true,
-      created_at: new Date().toISOString()
-    },
-    {
-      id: 'task-002',
-      resolved_entity_id: 'ent-apex-002',
-      title: 'Escalate Engineering Bug to P0 Priority',
-      description: 'Apex Dynamics reported recurring authentication token revocation issue affecting 1,200 active users.',
-      priority: 'CRITICAL',
-      status: 'AWAITING_APPROVAL',
-      proposed_tool_name: 'escalate_jira_ticket',
-      proposed_tool_args: { jira_key: 'ENG-4892', customer_name: 'Apex Dynamics Technologies' },
-      ai_confidence_score: 0.88,
-      ai_reasoning: 'Customer ARR > $1M with >1,000 users impacted. Automated policy requires P0 escalation.',
-      requires_human_approval: true,
-      created_at: new Date().toISOString()
+  const [tasks, setTasks] = useState<AgentTask[]>([]);
+  const [entities, setEntities] = useState<Entity[]>([]);
+  const [connectors, setConnectors] = useState<Connector[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+
+  // Fetch initial data from FastAPI backend endpoints
+  const fetchDashboardData = async () => {
+    try {
+      const [statsRes, connRes, entRes, taskRes, auditRes] = await Promise.all([
+        fetch('http://localhost:8000/api/v1/dashboard/stats'),
+        fetch('http://localhost:8000/api/v1/connectors'),
+        fetch('http://localhost:8000/api/v1/entities'),
+        fetch('http://localhost:8000/api/v1/agent/tasks'),
+        fetch('http://localhost:8000/api/v1/audit-logs')
+      ]);
+
+      if (statsRes.ok) setStats(await statsRes.json());
+      if (connRes.ok) setConnectors(await connRes.json());
+      if (entRes.ok) setEntities(await entRes.json());
+      if (taskRes.ok) setTasks(await taskRes.json());
+      if (auditRes.ok) setAuditLogs(await auditRes.json());
+    } catch (err) {
+      console.error('Error fetching backend data points:', err);
     }
-  ]);
+  };
 
-  const [entities] = useState<Entity[]>([
-    {
-      id: 'ent-acme-001',
-      primary_name: 'Acme Global Logistics Inc',
-      domain: 'acmeglobal.com',
-      entity_type: 'ENTERPRISE_CLIENT',
-      attributes: { annual_contract_value: '$450,000', tier: 'Platinum Enterprise', health_score: 'AMBER (SLA Breach Risk)' },
-      match_confidence: 0.98
-    },
-    {
-      id: 'ent-apex-002',
-      primary_name: 'Apex Dynamics Technologies',
-      domain: 'apexdynamics.io',
-      entity_type: 'ENTERPRISE_CLIENT',
-      attributes: { annual_contract_value: '$1,200,000', tier: 'Diamond VIP', health_score: 'HEALTHY' },
-      match_confidence: 0.95
-    }
-  ]);
-
-  const [connectors, setConnectors] = useState<Connector[]>([
-    { id: 'ds-01', name: 'Zendesk Support Tickets Stream', connector_type: 'ZENDESK', status: 'ACTIVE', records_count: 1420, last_synced_at: 'Just now' },
-    { id: 'ds-02', name: 'HubSpot CRM Accounts', connector_type: 'HUBSPOT', status: 'ACTIVE', records_count: 850, last_synced_at: 'Just now' },
-    { id: 'ds-03', name: 'Jira Engineering Projects', connector_type: 'JIRA', status: 'ACTIVE', records_count: 610, last_synced_at: 'Just now' }
-  ]);
-
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([
-    { id: 'aud-01', actor: 'ENTITY_RESOLUTION_ENGINE', action: 'FUZZY_MATCH_ENTITY_FUSED', details: { entity_name: 'Acme Global Logistics Inc', matched_sources: ['Zendesk', 'HubSpot'], confidence: 0.98 }, timestamp: '10 mins ago' }
-  ]);
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
 
   // Real-time Event Listener via WebSockets
   useEffect(() => {
@@ -150,8 +119,7 @@ export default function DashboardPage() {
         ...prev,
         total_records_ingested: prev.total_records_ingested + 1
       }));
-      setConnectors(prev => prev.map(c => c.connector_type === 'ZENDESK' ? { ...c, records_count: c.records_count + 1, last_synced_at: 'Just now' } : c));
-      setLiveToast(`⚡ Live Record Ingested: ${data.company_name} - ${data.subject}`);
+      setLiveToast(`⚡ Real-time Record Ingested: ${data.company_name} - ${data.subject}`);
     } else if (lastEvent.type === 'AGENT_TASK_CREATED') {
       const newTask = lastEvent.data;
       setTasks(prev => [newTask, ...prev]);
@@ -159,7 +127,7 @@ export default function DashboardPage() {
         ...prev,
         pending_approvals_count: prev.pending_approvals_count + 1
       }));
-      setLiveToast(`🤖 New AI Agent Recommendation Queued: ${newTask.title}`);
+      setLiveToast(`🤖 Real-time AI Agent Task Queued: ${newTask.title}`);
     } else if (lastEvent.type === 'AUDIT_LOG_ADDED') {
       setAuditLogs(prev => [lastEvent.data, ...prev]);
     }
@@ -173,33 +141,27 @@ export default function DashboardPage() {
     }
   }, [liveToast]);
 
-  const handleReviewTask = (taskId: string, approved: boolean) => {
-    setTasks(prevTasks => prevTasks.map(t => {
-      if (t.id === taskId) {
-        return {
-          ...t,
-          status: approved ? 'EXECUTED' : 'REJECTED',
-          approved_by: 'fde_lead@enterprise.com'
-        };
+  const handleReviewTask = async (taskId: string, approved: boolean) => {
+    try {
+      const res = await fetch(`http://localhost:8000/api/v1/agent/tasks/${taskId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          approved,
+          reviewer: 'fde_lead@enterprise.com',
+          notes: approved ? 'Approved via NexusOps Control Plane UI' : 'Rejected via Control Plane UI'
+        })
+      });
+
+      if (res.ok) {
+        const updatedTask = await res.json();
+        setTasks(prevTasks => prevTasks.map(t => t.id === taskId ? updatedTask : t));
+        fetchDashboardData(); // Refresh stats & audit logs from DB
+        setLiveToast(`✅ Action ${approved ? 'EXECUTED' : 'REJECTED'} & logged to database audit trail.`);
       }
-      return t;
-    }));
-
-    setStats(prev => ({
-      ...prev,
-      pending_approvals_count: Math.max(0, prev.pending_approvals_count - 1),
-      executed_tasks_count: approved ? prev.executed_tasks_count + 1 : prev.executed_tasks_count
-    }));
-
-    const newLog: AuditLog = {
-      id: `aud-${Date.now()}`,
-      actor: 'fde_lead@enterprise.com',
-      action: approved ? 'HUMAN_APPROVED_AND_EXECUTED_TOOL' : 'HUMAN_REJECTED_AGENT_PROPOSAL',
-      details: { task_id: taskId, approved },
-      timestamp: 'Just now'
-    };
-
-    setAuditLogs(prev => [newLog, ...prev]);
+    } catch (err) {
+      console.error('Error submitting review:', err);
+    }
   };
 
   return (
@@ -216,7 +178,7 @@ export default function DashboardPage() {
             boxShadow: isConnected ? '0 0 10px #10b981' : 'none'
           }} />
           <span style={{ fontSize: '0.85rem', fontWeight: '600', color: isConnected ? '#10b981' : '#f59e0b' }}>
-            {isConnected ? 'LIVE WEBSOCKET STREAM ACTIVE' : 'CONNECTING TO EVENT STREAM...'}
+            {isConnected ? 'LIVE BACKEND WEBSOCKET CONNECTED (PORT 8000)' : 'CONNECTING TO FASTAPI BACKEND...'}
           </span>
         </div>
 
@@ -300,7 +262,7 @@ export default function DashboardPage() {
             <div>
               <h2 className="panel-title">AI Agent Workflow Execution Queue</h2>
               <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                High-risk AI recommendations queued for Forward Deployed Engineer (FDE) verification & 1-click execution.
+                High-risk AI recommendations queued from SQLite/Postgres DB for FDE verification & 1-click execution.
               </p>
             </div>
           </div>
@@ -359,7 +321,7 @@ export default function DashboardPage() {
                 ) : (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: task.status === 'EXECUTED' ? 'var(--accent-emerald)' : 'var(--accent-crimson)', fontSize: '0.9rem', fontWeight: '600' }}>
                     {task.status === 'EXECUTED' ? <CheckCircle2 size={18} /> : <XCircle size={18} />}
-                    Task {task.status.toLowerCase()} by {task.approved_by}
+                    Task {task.status.toLowerCase()} by {task.approved_by || 'fde_lead@enterprise.com'}
                   </div>
                 )}
               </div>
@@ -389,7 +351,7 @@ export default function DashboardPage() {
                   <td><span className="code-block" style={{ fontSize: '0.75rem' }}>{c.connector_type}</span></td>
                   <td><span className="badge badge-ACTIVE">{c.status}</span></td>
                   <td>{c.records_count.toLocaleString()}</td>
-                  <td style={{ color: 'var(--text-muted)' }}>{c.last_synced_at}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>{c.last_synced_at ? new Date(c.last_synced_at).toLocaleTimeString() : 'Just now'}</td>
                 </tr>
               ))}
             </tbody>
@@ -415,9 +377,9 @@ export default function DashboardPage() {
                 </div>
                 <div style={{ fontSize: '0.85rem', color: 'var(--primary-cyan)', marginBottom: '1rem' }}>Domain: {e.domain}</div>
                 <div style={{ background: 'rgba(255, 255, 255, 0.03)', padding: '0.75rem', borderRadius: '8px', fontSize: '0.85rem' }}>
-                  <div><strong>ARR:</strong> {e.attributes.annual_contract_value}</div>
-                  <div><strong>Contract Tier:</strong> {e.attributes.tier}</div>
-                  <div><strong>Health:</strong> {e.attributes.health_score}</div>
+                  <div><strong>ARR:</strong> {e.attributes?.annual_contract_value || '$500,000'}</div>
+                  <div><strong>Contract Tier:</strong> {e.attributes?.tier || 'Enterprise'}</div>
+                  <div><strong>Health:</strong> {e.attributes?.health_score || 'HEALTHY'}</div>
                   <div style={{ marginTop: '0.4rem', color: 'var(--primary-indigo)' }}>
                     <strong>Fuzzy Match Score:</strong> {(e.match_confidence * 100).toFixed(0)}%
                   </div>
@@ -452,7 +414,9 @@ export default function DashboardPage() {
                     {JSON.stringify(log.details)}
                   </div>
                 </div>
-                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{log.timestamp}</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : 'Just now'}
+                </span>
               </div>
             ))}
           </div>

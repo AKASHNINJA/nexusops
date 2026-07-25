@@ -1,8 +1,9 @@
+import json
 from datetime import datetime
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from app.core.database import get_db
 from app.core.websockets import manager
 from app.models.domain import (
@@ -23,7 +24,6 @@ async def websocket_events_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep connection alive & receive optional client heartbeats
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
@@ -88,54 +88,92 @@ async def review_agent_task(
     payload: TaskApprovalRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    result = await db.execute(select(AgentWorkflowTask).where(AgentWorkflowTask.id == task_id))
-    task = result.scalar_one_or_none()
+    # Query explicit database columns directly
+    stmt = select(
+        AgentWorkflowTask.id,
+        AgentWorkflowTask.resolved_entity_id,
+        AgentWorkflowTask.title,
+        AgentWorkflowTask.description,
+        AgentWorkflowTask.priority,
+        AgentWorkflowTask.status,
+        AgentWorkflowTask.proposed_tool_name,
+        AgentWorkflowTask.proposed_tool_args_str,
+        AgentWorkflowTask.ai_confidence_score,
+        AgentWorkflowTask.ai_reasoning,
+        AgentWorkflowTask.requires_human_approval,
+        AgentWorkflowTask.created_at
+    ).where(AgentWorkflowTask.id == task_id)
 
-    if not task:
+    res = await db.execute(stmt)
+    row = res.first()
+
+    if not row:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
-    if task.status not in [TaskStatus.AWAITING_APPROVAL, TaskStatus.PENDING]:
-        raise HTTPException(status_code=400, detail=f"Task is in state '{task.status}', cannot review.")
+    (
+        t_id, resolved_entity_id, title, description, priority,
+        current_status, tool_name, tool_args_str, confidence, reasoning,
+        requires_approval, created_at
+    ) = row
 
-    task.approved_by = payload.reviewer
-    task.approval_notes = payload.notes
+    tool_args = json.loads(tool_args_str) if tool_args_str else {}
+    new_status = TaskStatus.EXECUTED if payload.approved else TaskStatus.REJECTED
 
     if payload.approved:
-        task.status = TaskStatus.APPROVED
-        # Execute tool automatically upon approval
-        exec_result = await execute_approved_agent_tool(task.proposed_tool_name, task.proposed_tool_args)
-        task.status = TaskStatus.EXECUTED
-        
-        # Add Audit Log
-        audit = AuditLog(
-            organization_id=task.resolved_entity.organization_id if task.resolved_entity else "org-default",
-            actor=payload.reviewer,
-            action="HUMAN_APPROVED_AND_EXECUTED_TOOL",
-            details={
-                "task_id": task.id,
-                "tool_name": task.proposed_tool_name,
-                "execution_result": exec_result,
-                "notes": payload.notes
-            }
-        )
-        db.add(audit)
+        exec_result = await execute_approved_agent_tool(tool_name, tool_args)
+        audit_action = "HUMAN_APPROVED_AND_EXECUTED_TOOL"
+        audit_details = {
+            "task_id": task_id,
+            "tool_name": tool_name,
+            "execution_result": exec_result,
+            "notes": payload.notes
+        }
     else:
-        task.status = TaskStatus.REJECTED
-        audit = AuditLog(
-            organization_id=task.resolved_entity.organization_id if task.resolved_entity else "org-default",
-            actor=payload.reviewer,
-            action="HUMAN_REJECTED_AGENT_PROPOSAL",
-            details={
-                "task_id": task.id,
-                "tool_name": task.proposed_tool_name,
-                "notes": payload.notes
-            }
-        )
-        db.add(audit)
+        audit_action = "HUMAN_REJECTED_AGENT_PROPOSAL"
+        audit_details = {
+            "task_id": task_id,
+            "tool_name": tool_name,
+            "notes": payload.notes
+        }
 
+    # Execute direct update query
+    upd_stmt = (
+        update(AgentWorkflowTask)
+        .where(AgentWorkflowTask.id == task_id)
+        .values(
+            status=new_status,
+            approved_by=payload.reviewer,
+            approval_notes=payload.notes
+        )
+    )
+    await db.execute(upd_stmt)
+
+    # Insert audit log
+    audit = AuditLog(
+        organization_id="org-acme-corp",
+        actor=payload.reviewer,
+        action=audit_action,
+        details=audit_details
+    )
+    db.add(audit)
     await db.commit()
-    await db.refresh(task)
-    return task
+
+    return AgentWorkflowTaskRead(
+        id=t_id,
+        resolved_entity_id=resolved_entity_id,
+        title=title,
+        description=description,
+        priority=priority,
+        status=new_status,
+        proposed_tool_name=tool_name,
+        proposed_tool_args=tool_args,
+        ai_confidence_score=confidence,
+        ai_reasoning=reasoning,
+        requires_human_approval=requires_approval,
+        approved_by=payload.reviewer,
+        approval_notes=payload.notes,
+        created_at=created_at
+    )
 
 @router.get("/audit-logs", response_model=List[AuditLogRead])
 async def list_audit_logs(limit: int = 50, db: AsyncSession = Depends(get_db)):
