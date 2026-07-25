@@ -1,9 +1,10 @@
 from datetime import datetime
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.core.database import get_db
+from app.core.websockets import manager
 from app.models.domain import (
     Organization, DataSource, IngestedRecord, ResolvedEntity,
     AgentWorkflowTask, AuditLog, TaskStatus
@@ -16,6 +17,16 @@ from app.schemas.api import (
 from app.services.agent_engine import execute_approved_agent_tool
 
 router = APIRouter(prefix="/api/v1")
+
+@router.websocket("/ws/events")
+async def websocket_events_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive & receive optional client heartbeats
+            data = await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
 
 @router.get("/health")
 async def health_check():

@@ -6,13 +6,12 @@ import {
   Database,
   GitMerge,
   Cpu,
-  FileCode,
   CheckCircle2,
   XCircle,
-  Clock,
-  ArrowUpRight,
-  RefreshCw
+  Zap,
+  Activity
 } from 'lucide-react';
+import { useWebSocket, WebSocketEvent } from '../hooks/useWebSocket';
 
 interface Stats {
   total_organizations: number;
@@ -68,6 +67,10 @@ interface AuditLog {
 
 export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<'agent-queue' | 'connectors' | 'entities' | 'audit'>('agent-queue');
+  const [liveToast, setLiveToast] = useState<string | null>(null);
+
+  const { isConnected, lastEvent } = useWebSocket();
+
   const [stats, setStats] = useState<Stats>({
     total_organizations: 1,
     active_connectors: 3,
@@ -108,7 +111,7 @@ export default function DashboardPage() {
     }
   ]);
 
-  const [entities, setEntities] = useState<Entity[]>([
+  const [entities] = useState<Entity[]>([
     {
       id: 'ent-acme-001',
       primary_name: 'Acme Global Logistics Inc',
@@ -137,7 +140,40 @@ export default function DashboardPage() {
     { id: 'aud-01', actor: 'ENTITY_RESOLUTION_ENGINE', action: 'FUZZY_MATCH_ENTITY_FUSED', details: { entity_name: 'Acme Global Logistics Inc', matched_sources: ['Zendesk', 'HubSpot'], confidence: 0.98 }, timestamp: '10 mins ago' }
   ]);
 
-  const handleReviewTask = async (taskId: string, approved: boolean) => {
+  // Real-time Event Listener via WebSockets
+  useEffect(() => {
+    if (!lastEvent) return;
+
+    if (lastEvent.type === 'RECORD_INGESTED') {
+      const data = lastEvent.data;
+      setStats(prev => ({
+        ...prev,
+        total_records_ingested: prev.total_records_ingested + 1
+      }));
+      setConnectors(prev => prev.map(c => c.connector_type === 'ZENDESK' ? { ...c, records_count: c.records_count + 1, last_synced_at: 'Just now' } : c));
+      setLiveToast(`⚡ Live Record Ingested: ${data.company_name} - ${data.subject}`);
+    } else if (lastEvent.type === 'AGENT_TASK_CREATED') {
+      const newTask = lastEvent.data;
+      setTasks(prev => [newTask, ...prev]);
+      setStats(prev => ({
+        ...prev,
+        pending_approvals_count: prev.pending_approvals_count + 1
+      }));
+      setLiveToast(`🤖 New AI Agent Recommendation Queued: ${newTask.title}`);
+    } else if (lastEvent.type === 'AUDIT_LOG_ADDED') {
+      setAuditLogs(prev => [lastEvent.data, ...prev]);
+    }
+  }, [lastEvent]);
+
+  // Auto-dismiss toast notification
+  useEffect(() => {
+    if (liveToast) {
+      const timer = setTimeout(() => setLiveToast(null), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [liveToast]);
+
+  const handleReviewTask = (taskId: string, approved: boolean) => {
     setTasks(prevTasks => prevTasks.map(t => {
       if (t.id === taskId) {
         return {
@@ -168,6 +204,41 @@ export default function DashboardPage() {
 
   return (
     <div>
+      {/* Realtime Connection Banner */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+          <span style={{
+            display: 'inline-block',
+            width: '10px',
+            height: '10px',
+            borderRadius: '50%',
+            backgroundColor: isConnected ? '#10b981' : '#f59e0b',
+            boxShadow: isConnected ? '0 0 10px #10b981' : 'none'
+          }} />
+          <span style={{ fontSize: '0.85rem', fontWeight: '600', color: isConnected ? '#10b981' : '#f59e0b' }}>
+            {isConnected ? 'LIVE WEBSOCKET STREAM ACTIVE' : 'CONNECTING TO EVENT STREAM...'}
+          </span>
+        </div>
+
+        {liveToast && (
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.2), rgba(6, 182, 212, 0.2))',
+            border: '1px solid var(--border-glow)',
+            padding: '0.4rem 1rem',
+            borderRadius: '8px',
+            fontSize: '0.85rem',
+            fontWeight: '600',
+            color: '#fff',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem'
+          }}>
+            <Zap size={16} color="#06b6d4" />
+            {liveToast}
+          </div>
+        )}
+      </div>
+
       {/* Top Overview Metrics */}
       <div className="stats-grid">
         <div className="stat-card">
